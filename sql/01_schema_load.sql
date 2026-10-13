@@ -1,5 +1,8 @@
+-- =============================================================
 -- 01_schema_load.sql
--- Create database and tables, then load cleaned CSVs from processed_data/
+-- 目的：建立資料庫與 3 張資料表，載入 processed_data/ 的清理後資料
+-- 範圍：2016/9 ~ 2018/10
+-- =============================================================
 
 CREATE DATABASE IF NOT EXISTS olist
   CHARACTER SET utf8mb4
@@ -7,24 +10,17 @@ CREATE DATABASE IF NOT EXISTS olist
 
 USE olist;
 
--- Drop tables in reverse dependency order so the script can be re-run
-DROP TABLE IF EXISTS order_reviews;
+-- 依相依順序反向刪除，讓這支程式可以重複執行
 DROP TABLE IF EXISTS order_items;
 DROP TABLE IF EXISTS products;
 DROP TABLE IF EXISTS orders;
-DROP TABLE IF EXISTS customers;
 
--- customers: one row per customer_id (one customer_id per order)
-CREATE TABLE customers (
-    customer_id              CHAR(32)     NOT NULL,
-    customer_unique_id       CHAR(32)     NOT NULL,
-    customer_zip_code_prefix VARCHAR(10),
-    customer_city            VARCHAR(100),
-    customer_state           CHAR(2),
-    PRIMARY KEY (customer_id)
-);
 
--- orders: one row per order
+-- -------------------------------------------------------------
+-- 1. 建立資料表
+-- -------------------------------------------------------------
+
+-- orders：一列 = 一張訂單
 CREATE TABLE orders (
     order_id                      CHAR(32)    NOT NULL,
     customer_id                   CHAR(32)    NOT NULL,
@@ -34,13 +30,12 @@ CREATE TABLE orders (
     order_delivered_carrier_date  DATETIME,
     order_delivered_customer_date DATETIME,
     order_estimated_delivery_date DATE        NOT NULL,
-    PRIMARY KEY (order_id),
-    FOREIGN KEY (customer_id) REFERENCES customers (customer_id)
+    PRIMARY KEY (order_id)
 );
 
--- products: one row per product
+-- products：一列 = 一個商品
 CREATE TABLE products (
-    product_id                    CHAR(32)     NOT NULL,
+    product_id                    CHAR(32)      NOT NULL,
     product_category_name         VARCHAR(60),
     product_name_length           DECIMAL(10,1),
     product_description_length    DECIMAL(10,1),
@@ -49,11 +44,11 @@ CREATE TABLE products (
     product_length_cm             DECIMAL(10,1),
     product_height_cm             DECIMAL(10,1),
     product_width_cm              DECIMAL(10,1),
-    product_category_name_english VARCHAR(60)  NOT NULL,
+    product_category_name_english VARCHAR(60)   NOT NULL,
     PRIMARY KEY (product_id)
 );
 
--- order_items: one row per item within an order
+-- order_items：一列 = 訂單中的一件商品（一張訂單可能有多列）
 CREATE TABLE order_items (
     order_id            CHAR(32)      NOT NULL,
     order_item_id       INT           NOT NULL,
@@ -67,23 +62,10 @@ CREATE TABLE order_items (
     FOREIGN KEY (product_id) REFERENCES products (product_id)
 );
 
--- order_reviews: one row per review (an order may have more than one review)
-CREATE TABLE order_reviews (
-    review_id               CHAR(32) NOT NULL,
-    order_id                CHAR(32) NOT NULL,
-    review_score            TINYINT  NOT NULL,
-    review_creation_date    DATETIME NOT NULL,
-    review_answer_timestamp DATETIME NOT NULL,
-    PRIMARY KEY (review_id, order_id),
-    FOREIGN KEY (order_id) REFERENCES orders (order_id)
-);
 
--- Load cleaned CSVs (run from the project root so the relative paths work)
-LOAD DATA LOCAL INFILE 'processed_data/customers.csv'
-INTO TABLE customers
-FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"'
-LINES TERMINATED BY '\n'
-IGNORE 1 LINES;
+-- -------------------------------------------------------------
+-- 2. 載入資料（先載 orders、products，order_items 參照它們所以最後載）
+-- -------------------------------------------------------------
 
 LOAD DATA LOCAL INFILE 'processed_data/orders.csv'
 INTO TABLE orders
@@ -103,20 +85,21 @@ FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"'
 LINES TERMINATED BY '\n'
 IGNORE 1 LINES;
 
-LOAD DATA LOCAL INFILE 'processed_data/order_reviews.csv'
-INTO TABLE order_reviews
-FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"'
-LINES TERMINATED BY '\n'
-IGNORE 1 LINES;
 
--- Check row counts against the CSV exports
--- Expected: customers 99441, orders 99441, products 32951, order_items 112650, order_reviews 99224
-SELECT 'customers' AS table_name, COUNT(*) AS row_count FROM customers
+-- -------------------------------------------------------------
+-- 3. 載入檢查
+-- -------------------------------------------------------------
+
+-- 3-1 筆數要和 CSV 一致
+-- 預期：orders 99441、products 32951、order_items 112650
+SELECT 'orders' AS table_name, COUNT(*) AS row_count FROM orders
 UNION ALL
-SELECT 'orders',        COUNT(*) FROM orders
+SELECT 'products',             COUNT(*)              FROM products
 UNION ALL
-SELECT 'products',      COUNT(*) FROM products
-UNION ALL
-SELECT 'order_items',   COUNT(*) FROM order_items
-UNION ALL
-SELECT 'order_reviews', COUNT(*) FROM order_reviews;
+SELECT 'order_items',          COUNT(*)              FROM order_items;
+
+-- 3-2 缺值要以 NULL 載入，而不是空字串或 0
+-- 預期：未送達日期 2965、缺類別 610
+SELECT
+    (SELECT COUNT(*) FROM orders   WHERE order_delivered_customer_date IS NULL) AS null_delivered_date,
+    (SELECT COUNT(*) FROM products WHERE product_category_name IS NULL)         AS null_category;
